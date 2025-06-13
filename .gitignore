@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# Docker
+.dockerignore # Si tu en crées un séparément
+Dockerfile.backup # Si tu crées des backups de ton Dockerfile
+
+# Dépendances de l'OS / IDE
+.DS_Store
+.idea/
+*.log
+
+# Fichiers de données temporaires ou lourds (pour le ML)
+data/processed/
+models/
+*.csv # Si tu ne veux pas versionner les exports de données
+*.json # Si tu ne veux pas versionner les exports de données
