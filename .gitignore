@@ -1,4 +1,4 @@
-# Python
+# Python bytecode and virtual environments
 __pycache__/
 *.pyc
 *.pyo
@@ -8,17 +8,25 @@ env/
 venv/
 .venv/
 
-# Docker
-.dockerignore # Si tu en crées un séparément
-Dockerfile.backup # Si tu crées des backups de ton Dockerfile
-
-# Dépendances de l'OS / IDE
-.DS_Store
+# VSCode and IDE settings
+.vscode/
 .idea/
+
+# macOS files
+.DS_Store
+
+# Log files
 *.log
 
-# Fichiers de données temporaires ou lourds (pour le ML)
+# Docker files
+.dockerignore
+Dockerfile.backup
+
+# Data science artifacts
 data/processed/
 models/
-*.csv # Si tu ne veux pas versionner les exports de données
-*.json # Si tu ne veux pas versionner les exports de données
+*.csv
+*.json
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/

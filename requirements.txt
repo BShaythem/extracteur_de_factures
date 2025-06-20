@@ -1,0 +1,13 @@
+flask
+pytesseract
+pillow
+opencv-python
+scikit-learn
+numpy
+pandas
+jupyter
+transformers 
+datasets 
+torch 
+torchvision
+pdf2image
