@@ -13,11 +13,14 @@ for split_name, out_jsonl, out_filtered in splits:
     if not os.path.exists(coco_path):
         print(f"No COCO file for split {split_name}, skipping.")
         continue
+
     with open(coco_path, "r") as f:
         coco = json.load(f)
+
     images = {img['id']: img for img in coco['images']}
     categories = {cat['id']: cat['name'] for cat in coco['categories']}
     annotations = coco['annotations']
+    # Create a mapping of image IDs to their regions
     regions_per_image = {}
     for ann in annotations:
         img_id = ann['image_id']
@@ -29,20 +32,30 @@ for split_name, out_jsonl, out_filtered in splits:
         skipped = 0
         for img_id, img_info in images.items():
             img_path = os.path.join(f"dataset/{split_name}", img_info['file_name'])
-            image = preprocess_image_for_ocr(img_path)
+            # Get preprocessed image and scale factors
+            image, w_scale, h_scale = preprocess_image_for_ocr(img_path, return_scale=True)
             if image is None:
+                print(f"[{split_name}] Skipping {img_info['file_name']} (image read error)")
                 skipped += 1
                 continue
+
             tokens = ocr_tokens_and_bboxes(image)
+
             if not tokens:
+                print(f"[{split_name}] Skipping {img_info['file_name']} (no OCR tokens)")
                 skipped += 1
                 continue  # Skip images with no tokens
 
             # Sort tokens top-to-bottom, left-to-right
             tokens.sort(key=lambda t: (t["position"][0], t["position"][1]))
 
-            # BIO tagging
-            labels = bio_tag_tokens(tokens, regions_per_image.get(img_id, []))
+            # Get annotation regions for this image
+            regions = regions_per_image.get(img_id, [])
+            if not regions:
+                print(f"[{split_name}] Warning: No annotations for {img_info['file_name']}")
+
+            # BIO tagging with scale factors
+            labels = bio_tag_tokens(tokens, regions, w_scale=w_scale, h_scale=h_scale)
 
             # Write as JSONL
             fout.write(json.dumps({

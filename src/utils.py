@@ -65,82 +65,145 @@ def extract_text_from_any_file(file_path):
     else:
         return extract_text_from_invoice(file_path)
 
-def preprocess_image_for_ocr(img_path):
+def preprocess_image_for_ocr(img_path, return_scale=False):
     """
-    Preprocess the image for OCR: convert to grayscale, apply adaptive thresholding, and resize if necessary.
+    Preprocess the image for OCR: denoise, sharpen, enhance contrast, binarize, and resize if necessary.
     Args:
         img_path (str): Path to the image file.
+        return_scale (bool): If True, also return the scale factor (w_scale, h_scale) applied.
     Returns:
         PIL.Image.Image: Preprocessed image.
+        (optional) (w_scale, h_scale): scale factors for width and height
     """
     cv_img = cv2.imread(img_path)
     if cv_img is None:
-        return None
+        return (None, None, None) if return_scale else None
+    # Denoise
+    cv_img = cv2.fastNlMeansDenoisingColored(cv_img, None, 10, 10, 7, 21)
+    # Sharpen
+    kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+    cv_img = cv2.filter2D(cv_img, -1, kernel)
+    # Convert to grayscale
     gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-    bin_img = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                    cv2.THRESH_BINARY, 31, 15)
+    # Contrast enhancement (CLAHE)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    gray = clahe.apply(gray)
+    # Adaptive thresholding
+    try:
+        bin_img = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY, 31, 15
+        )
+    except Exception:
+        bin_img = gray
     h, w = bin_img.shape
+    orig_h, orig_w = h, w
+    w_scale = h_scale = 1.0
     if min(h, w) < 1000:
         scale = 1000.0 / min(h, w)
         bin_img = cv2.resize(bin_img, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_CUBIC)
-    image = Image.fromarray(bin_img)
+        h, w = bin_img.shape
+        w_scale = w / orig_w
+        h_scale = h / orig_h
+    image = Image.fromarray(bin_img).convert("RGB")
+    if return_scale:
+        return image, w_scale, h_scale
     return image
+
+def normalize_bbox(bbox, width, height):
+    x0, y0, x1, y1 = bbox
+    return [
+        int(1000 * x0 / width),
+        int(1000 * y0 / height),
+        int(1000 * x1 / width),
+        int(1000 * y1 / height)
+    ]
 
 def ocr_tokens_and_bboxes(image):
     """
-    Perform OCR on the image and extract tokens and their bounding boxes.
-    Args:
-        image (PIL.Image.Image): Input image.
+    Perform OCR on both the original and inverted grayscale images, merge tokens.
     Returns:
-        List of tokens with bounding box information.
+        List of dicts with text, norm bbox, orig bbox, position
     """
     width, height = image.size
-    ocr_data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+    # Convert to grayscale
+    gray = np.array(image.convert("L"))
+    # OCR on original
+    data1 = pytesseract.image_to_data(Image.fromarray(gray), output_type=pytesseract.Output.DICT)
+    # OCR on inverted
+    inv_gray = cv2.bitwise_not(gray)
+    data2 = pytesseract.image_to_data(Image.fromarray(inv_gray), output_type=pytesseract.Output.DICT)
     tokens = []
-    for i in range(len(ocr_data['text'])):
-        text = ocr_data['text'][i]
-        if not text.strip():
-            continue
-        x, y, w, h = ocr_data['left'][i], ocr_data['top'][i], ocr_data['width'][i], ocr_data['height'][i]
-        x0, y0, x1, y1 = x, y, x + w, y + h
-        norm_box = [
-            int(1000 * x0 / width),
-            int(1000 * y0 / height),
-            int(1000 * x1 / width),
-            int(1000 * y1 / height)
-        ]
-        tokens.append({
-            "text": text,
-            "bbox": norm_box,
-            "orig_bbox": [x0, y0, x1, y1],
-            "position": (y, x)
-        })
+    seen = set()
+    for data in [data1, data2]:
+        for i in range(len(data["text"])):
+            text = data["text"][i].strip()
+            if not text or all(c in ",.-|_:;" for c in text):
+                continue
+            x, y, w, h = data["left"][i], data["top"][i], data["width"][i], data["height"][i]
+            if w == 0 or h == 0:
+                continue
+            x0, y0, x1, y1 = x, y, x + w, y + h
+            key = (text, x0, y0, x1, y1)
+            if key in seen:
+                continue
+            seen.add(key)
+            tokens.append({
+                "text": text,
+                "bbox": normalize_bbox([x0, y0, x1, y1], width, height),
+                "orig_bbox": [x0, y0, x1, y1],
+                "position": (y, x)
+            })
     return tokens
 
-def bio_tag_tokens(tokens, regions):
+def bbox_iou(boxA, boxB):
+    # Compute intersection over union between two boxes
+    xA = max(boxA[0], boxB[0])
+    yA = max(boxA[1], boxB[1])
+    xB = min(boxA[2], boxB[2])
+    yB = min(boxA[3], boxB[3])
+    interW = max(0, xB - xA)
+    interH = max(0, yB - yA)
+    interArea = interW * interH
+    if interArea == 0:
+        return 0.0
+    boxAArea = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
+    boxBArea = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
+    return interArea / float(boxAArea + boxBArea - interArea)
+
+def bio_tag_tokens(tokens, regions, w_scale=1.0, h_scale=1.0, iou_threshold=0.1, debug=False):
     """
-    Apply BIO tagging to the tokens based on the given regions.
+    BIO-tag tokens based on overlap with annotation regions.
     Args:
-        tokens (list): List of tokens.
-        regions (list): List of regions with bounding box information.
+        tokens (list): List of tokens (with 'orig_bbox').
+        regions (list): List of regions with 'bbox' (COCO format) and 'label'.
+        w_scale, h_scale: scaling factors applied to the image (and thus to COCO boxes)
+        iou_threshold (float): IOU threshold for matching.
+        debug (bool): If True, print debug info.
     Returns:
         List of BIO tags for the tokens.
     """
     labels = ["O"] * len(tokens)
-    # Ensure region labels are used exactly as in COCO (case, spaces, etc.)
     for region in regions:
         rx, ry, rw, rh = region['bbox']
-        rx1, ry1 = rx + rw, ry + rh
-        region_label = str(region['label'])  # Use as-is from COCO
-        inside = []
-        for idx, t in enumerate(tokens):
-            tx0, ty0, tx1, ty1 = t["orig_bbox"]
-            if not (tx1 < rx or tx0 > rx1 or ty1 < ry or ty0 > ry1):
-                inside.append(idx)
-        if inside:
-            labels[inside[0]] = f"B-{region_label}"
-            for idx in inside[1:]:
-                labels[idx] = f"I-{region_label}"
+        # Scale COCO box to OCR image size
+        rx, ry, rw, rh = rx * w_scale, ry * h_scale, rw * w_scale, rh * h_scale
+        region_box = [rx, ry, rx + rw, ry + rh]
+        region_label = region['label']
+        matched_indices = []
+        for i, t in enumerate(tokens):
+            token_box = t["orig_bbox"]
+            iou = bbox_iou(token_box, region_box)
+            if debug and iou > 0:
+                print(f"Token: {t['text']} | Token box: {token_box} | Region: {region_label} | Region box: {region_box} | IOU: {iou:.3f}")
+            if iou > iou_threshold:
+                matched_indices.append(i)
+        if matched_indices:
+            labels[matched_indices[0]] = f"B-{region_label}"
+            for i in matched_indices[1:]:
+                labels[i] = f"I-{region_label}"
+    if debug and all(l == "O" for l in labels):
+        print("[DEBUG] No tokens matched any region. Check coordinate systems and IOU threshold.")
     return labels
 
 def deskew_image_and_bboxes(image, bboxes=None):
@@ -154,10 +217,6 @@ def deskew_image_and_bboxes(image, bboxes=None):
         rotated_bboxes (list): Rotated bounding boxes (if bboxes provided), else None.
         angle (float): Rotation angle in degrees (counterclockwise).
     """
-    import cv2
-    import numpy as np
-    from PIL import Image
-
     # Convert PIL to OpenCV
     img_cv = np.array(image)
     if img_cv.ndim == 3 and img_cv.shape[2] == 3:
