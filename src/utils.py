@@ -1,17 +1,18 @@
 # filepath: src/utils.py
-import pytesseract
-import cv2
 import os
-from PIL import Image
-import fitz  # PyMuPDF
+import cv2
 import numpy as np
+from PIL import Image
+from paddleocr import PaddleOCR
+import paddle
+from pdf2image import convert_from_path
 
-# Set tesseract path if not in PATH (uncomment and adjust if needed)
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# Initialize PaddleOCR (GPU/CPU is auto-detected by installed paddlepaddle)
+ocr_engine = PaddleOCR(use_angle_cls=True, lang='en', show_log=False, use_gpu=False)
 
 def pdf_to_images(pdf_path, output_folder=None, fmt='png'):
     """
-    Converts a PDF file to images (one per page) using PyMuPDF.
+    Converts a PDF file to images (one per page) using pdf2image.
     Args:
         pdf_path (str): Path to the PDF file.
         output_folder (str, optional): Folder to save images. If None, images are not saved to disk.
@@ -19,20 +20,16 @@ def pdf_to_images(pdf_path, output_folder=None, fmt='png'):
     Returns:
         List of PIL.Image objects.
     """
-    doc = fitz.open(pdf_path)
-    images = []
-    for i, page in enumerate(doc):
-        pix = page.get_pixmap()
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        images.append(img)
-        if output_folder:
-            os.makedirs(output_folder, exist_ok=True)
+    images = convert_from_path(pdf_path)
+    if output_folder:
+        os.makedirs(output_folder, exist_ok=True)
+        for i, img in enumerate(images):
             img.save(f"{output_folder}/page_{i+1}.{fmt}", fmt.upper())
     return images
 
 def extract_text_from_invoice(image):
     """
-    Extract text from an image file path or a PIL Image.
+    Extract text from an image file path or a PIL Image using PaddleOCR.
     Args:
         image (str or PIL.Image.Image): Path to image or PIL Image object.
     Returns:
@@ -42,11 +39,13 @@ def extract_text_from_invoice(image):
         img = cv2.imread(image)
         if img is None:
             raise FileNotFoundError(f"Image not found at path: {image}")
-        text = pytesseract.image_to_string(img)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     elif isinstance(image, Image.Image):
-        text = pytesseract.image_to_string(image)
+        img = np.array(image.convert("RGB"))
     else:
         raise ValueError("Input must be a file path or PIL.Image.Image")
+    result = ocr_engine.ocr(img, cls=True)
+    text = "\n".join([line[1][0] for line in result[0]])
     return text
 
 def extract_text_from_any_file(file_path):
@@ -65,12 +64,13 @@ def extract_text_from_any_file(file_path):
     else:
         return extract_text_from_invoice(file_path)
 
-def preprocess_image_for_ocr(img_path, return_scale=False):
+def preprocess_image_for_ocr(img_path, return_scale=False, binarize=True):
     """
-    Preprocess the image for OCR: denoise, sharpen, enhance contrast, binarize, and resize if necessary.
+    Preprocess the image for OCR: denoise, sharpen, enhance contrast, binarize (optional), and resize if necessary.
     Args:
         img_path (str): Path to the image file.
         return_scale (bool): If True, also return the scale factor (w_scale, h_scale) applied.
+        binarize (bool): If True, apply adaptive thresholding. If False, keep as natural image (recommended for PaddleOCR).
     Returns:
         PIL.Image.Image: Preprocessed image.
         (optional) (w_scale, h_scale): scale factors for width and height
@@ -88,21 +88,24 @@ def preprocess_image_for_ocr(img_path, return_scale=False):
     # Contrast enhancement (CLAHE)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
     gray = clahe.apply(gray)
-    # Adaptive thresholding
-    try:
-        bin_img = cv2.adaptiveThreshold(
-            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY, 31, 15
-        )
-    except Exception:
-        bin_img = gray
-    h, w = bin_img.shape
+    if binarize:
+        # Adaptive thresholding
+        try:
+            bin_img = cv2.adaptiveThreshold(
+                gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY, 31, 15
+            )
+        except Exception:
+            bin_img = gray
+    else:
+        bin_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+    h, w = bin_img.shape[:2] if binarize else bin_img.shape[:2]
     orig_h, orig_w = h, w
     w_scale = h_scale = 1.0
     if min(h, w) < 1000:
         scale = 1000.0 / min(h, w)
         bin_img = cv2.resize(bin_img, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_CUBIC)
-        h, w = bin_img.shape
+        h, w = bin_img.shape[:2]
         w_scale = w / orig_w
         h_scale = h / orig_h
     image = Image.fromarray(bin_img).convert("RGB")
@@ -119,41 +122,43 @@ def normalize_bbox(bbox, width, height):
         int(1000 * y1 / height)
     ]
 
-def ocr_tokens_and_bboxes(image):
+def ocr_tokens_and_bboxes(image, granularity="word"):
     """
-    Perform OCR on both the original and inverted grayscale images, merge tokens.
+    Perform OCR using PaddleOCR and return tokens and bounding boxes.
+    Args:
+        image: PIL.Image or file path
+        granularity: 'word' (default) or 'line' (PaddleOCR returns both)
     Returns:
         List of dicts with text, norm bbox, orig bbox, position
     """
-    width, height = image.size
-    # Convert to grayscale
-    gray = np.array(image.convert("L"))
-    # OCR on original
-    data1 = pytesseract.image_to_data(Image.fromarray(gray), output_type=pytesseract.Output.DICT)
-    # OCR on inverted
-    inv_gray = cv2.bitwise_not(gray)
-    data2 = pytesseract.image_to_data(Image.fromarray(inv_gray), output_type=pytesseract.Output.DICT)
+    if isinstance(image, Image.Image):
+        img = np.array(image.convert("RGB"))
+    elif isinstance(image, str):
+        img = cv2.imread(image)
+        if img is None:
+            raise FileNotFoundError(f"Image not found at path: {image}")
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    else:
+        raise ValueError("Input must be a file path or PIL.Image.Image")
+    width, height = img.shape[1], img.shape[0]
+    result = ocr_engine.ocr(img, cls=True)
     tokens = []
-    seen = set()
-    for data in [data1, data2]:
-        for i in range(len(data["text"])):
-            text = data["text"][i].strip()
-            if not text or all(c in ",.-|_:;" for c in text):
-                continue
-            x, y, w, h = data["left"][i], data["top"][i], data["width"][i], data["height"][i]
-            if w == 0 or h == 0:
-                continue
-            x0, y0, x1, y1 = x, y, x + w, y + h
-            key = (text, x0, y0, x1, y1)
-            if key in seen:
-                continue
-            seen.add(key)
-            tokens.append({
-                "text": text,
-                "bbox": normalize_bbox([x0, y0, x1, y1], width, height),
-                "orig_bbox": [x0, y0, x1, y1],
-                "position": (y, x)
-            })
+    # PaddleOCR returns [ [ [box, (text, conf)], ... ] ]
+    for line in result[0]:
+        text = line[1][0].strip()
+        if not text or all(c in ",.-|_:;" for c in text):
+            continue
+        box = line[0]  # 4 points: [[x0, y0], [x1, y1], [x2, y2], [x3, y3]]
+        x_coords = [pt[0] for pt in box]
+        y_coords = [pt[1] for pt in box]
+        x0, y0, x1, y1 = int(min(x_coords)), int(min(y_coords)), int(max(x_coords)), int(max(y_coords))
+        tokens.append({
+            "text": text,
+            "bbox": normalize_bbox([x0, y0, x1, y1], width, height),
+            "orig_bbox": [x0, y0, x1, y1],
+            "position": (y0, x0)
+        })
+    # Optionally, for line-level tokens, group by lines (not implemented here)
     return tokens
 
 def bbox_iou(boxA, boxB):
@@ -178,7 +183,7 @@ def bio_tag_tokens(tokens, regions, w_scale=1.0, h_scale=1.0, iou_threshold=0.1,
         tokens (list): List of tokens (with 'orig_bbox').
         regions (list): List of regions with 'bbox' (COCO format) and 'label'.
         w_scale, h_scale: scaling factors applied to the image (and thus to COCO boxes)
-        iou_threshold (float): IOU threshold for matching.
+        iou_threshold (float): IOU threshold for matching (default 0.1, may need tuning for PaddleOCR).
         debug (bool): If True, print debug info.
     Returns:
         List of BIO tags for the tokens.

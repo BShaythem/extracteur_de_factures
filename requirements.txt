@@ -1,11 +1,8 @@
 flask==3.0.3
-pytesseract==0.3.10
 pillow==10.3.0
-opencv-python==4.9.0.80
-scikit-learn==1.4.2
+opencv-contrib-python==4.6.0.66
 numpy==1.26.4
 pandas==2.2.2
-jupyter==1.0.0
 transformers==4.40.2
 datasets==2.19.1
 torch==2.2.2+cu121
@@ -13,9 +10,31 @@ torchvision==0.17.2+cu121
 torchaudio==2.2.2+cu121
 --extra-index-url https://download.pytorch.org/whl/cu121
 pdf2image==1.17.0
-pymupdf==1.24.4
 roboflow==1.1.27
 python-dotenv==1.0.1
 accelerate==0.29.3
 seqeval==1.2.2
-label-studio==1.13.1
+
+
+# --- OCR dependencies required for paddleocr ---
+attrdict
+beautifulsoup4
+cython
+fire
+imgaug
+lmdb
+lxml
+openpyxl
+pdf2docx
+premailer
+pyclipper
+python-docx
+rapidfuzz
+scikit-image
+visualdl
+
+# Install paddleocr (core package) without dependencies:
+# pip install paddleocr==2.7.0.3 --no-deps
+
+# Install paddlepaddle-gpu matching your CUDA version (example below for CUDA 11.2/11.6/12.1):
+# pip install paddlepaddle-gpu==2.6.2 -f https://www.paddlepaddle.org.cn/whl/windows/mkl/avx/stable.html

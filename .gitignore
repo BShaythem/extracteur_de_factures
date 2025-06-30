@@ -5,7 +5,7 @@ __pycache__/
 *.pyd
 .Python
 env/
-venv/
+venv311/
 .venv/
 
 # VSCode and IDE settings
@@ -22,14 +22,65 @@ venv/
 .dockerignore
 Dockerfile.backup
 
-# Data science artifacts
-data/processed/
-models/
+# Data science artifacts and outputs
+src/layoutlmv3-invoice/
+src/data/
+dataset/
+dataset2/
+cudnn/
 *.csv
 *.json
+*.tsv
+*.xlsx
+*.xls
+*.parquet
+*.feather
+*.h5
+*.npz
+*.npy
+*.pkl
+*.joblib
 
-# Jupyter Notebook checkpoints
+# Jupyter Notebook checkpoints and outputs
 .ipynb_checkpoints/
+*.nbconvert.ipynb
+*.nb.html
 
-# Environment variables
+# Environment variables and secrets
 .env
+.env.*
+secrets.*
+
+# Hugging Face and transformers cache
+~/.cache/huggingface/
+~/.huggingface/
+.huggingface/
+
+# PaddleOCR and PaddlePaddle cache
+~/.paddleocr/
+~/.paddle/
+
+# PDF/image conversion temp files
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.tiff
+*.bmp
+
+# Test and coverage
+htmlcov/
+.coverage
+.tox/
+.nox/
+.pytest_cache/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Misc
+*.bak
+*.swp
+*.swo
