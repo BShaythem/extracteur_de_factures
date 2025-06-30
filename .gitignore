@@ -28,6 +28,7 @@ src/data/
 dataset/
 dataset2/
 cudnn/
+model/
 *.csv
 *.json
 *.tsv

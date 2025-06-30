@@ -14,7 +14,7 @@ roboflow==1.1.27
 python-dotenv==1.0.1
 accelerate==0.29.3
 seqeval==1.2.2
-
+ipywidgets
 
 # --- OCR dependencies required for paddleocr ---
 attrdict
