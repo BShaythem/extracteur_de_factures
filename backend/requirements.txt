@@ -15,6 +15,7 @@ python-dotenv==1.0.1
 accelerate==0.29.3
 seqeval==1.2.2
 ipywidgets
+groq
 
 # --- OCR dependencies required for paddleocr ---
 attrdict

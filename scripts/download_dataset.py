@@ -8,7 +8,9 @@ if not api_key:
     raise ValueError("ROBOFLOW_API_KEY environment variable not set. Please add it to your .env file.")
 
 rf = Roboflow(api_key=api_key)
-project = rf.workspace("roboflow-5gpbq").project("invoice-data-mbpu8")
-version = project.version(1)
+#project = rf.workspace("roboflow-5gpbq").project("invoice-data-mbpu8")
+#version = project.version(1)
+project = rf.workspace("haythem-w862r").project("invoices-8dkem")
+version = project.version(8)
 dataset = version.download("coco")
 print(f"Data downloaded to: {dataset.location}")
