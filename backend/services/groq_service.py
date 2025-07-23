@@ -4,37 +4,9 @@ import time
 from groq import Groq
 
 class GroqService:
-    def extract_donut_json(self, invoice_text, fields=None, model="llama3-8b-8192"):
-        """
-        Extract Donut-style JSON from invoice text using Groq LLM.
-        Args:
-            invoice_text (str): The OCR text from the invoice.
-            fields (list): List of fields to extract.
-            model (str): Model name for Groq.
-        Returns:
-            dict: Extracted JSON object.
-        """
-        if fields is None:
-            fields = [
-                "invoice_number", "invoice_date", "due_date", "customer_name", "customer_address",
-                "supplier_name", "supplier_address", "item_description", "item_quantity",
-                "item_total_price", "item_unit_price", "tax_amount", "tax_rate",
-                "invoice_subtotal", "invoice_total"
-            ]
-        prompt = (
-            "You are an invoice extraction assistant.\n"
-            "Given the following invoice text, extract the following fields as a JSON object.\n"
-            f"Fields: {', '.join(fields)}\n"
-            "If a field is missing, use an empty string or empty list. For repeating items, use a list.\n"
-            "Invoice text:\n"
-            f"{invoice_text}\n"
-            "Return only the JSON object, no explanation.\n"
-            "Example output:\n"
-            "{\n  \"invoice_number\": \"12345\",\n  \"invoice_date\": \"2025-07-16\",\n  \"items\": [\n    {\"item_description\": \"Widget A\", \"item_quantity\": \"2\", \"item_unit_price\": \"10.00\", \"item_total_price\": \"20.00\"}\n  ],\n  \"invoice_total\": \"20.00\"\n}\n"
-        )
-        return self.call_groq(prompt, model=model, force_result_key=False)
-    
     def __init__(self, api_key=None):
+        # Debug: print the env variable value
+        print("GROQ_API_KEY from env:", os.getenv("GROQ_API_KEY"))
         self.client = Groq(
             api_key=api_key or os.getenv("GROQ_API_KEY")
         )

@@ -1,0 +1,15 @@
+invoice_number
+invoice_date
+due_date
+vendor-name
+vendor-address
+customer-name
+customer-address
+item-description
+item-quantity
+item-unit_price
+item-total_price
+subtotal
+tax_rate
+total_amount
+

@@ -1,4 +1,3 @@
-# filepath: src/utils.py
 import os
 import cv2
 import numpy as np
@@ -91,6 +90,8 @@ def run_paddle_ocr(file_path):
         bbox_rect = [int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))]
         ocr_output.append({"text": text, "bbox": bbox_rect})
     return ocr_output
+
+
 
 def normalize_bbox(bbox, width, height):
     x0, y0, x1, y1 = bbox
