@@ -1,8 +1,9 @@
 import os
 import json
+import time
 from tqdm import tqdm
 import sys
-import time  # <-- Add this import
+from typing import List
 # Add parent directory to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from backend.services.ollama_service import call_ollama
@@ -10,12 +11,9 @@ from backend.utils.utils import run_paddle_ocr
 from PIL import Image
 
 # --- CONFIGURATION ---
-IMAGE_DIR = "data/invoices-donut/test"  # Change as needed
-OUTPUT_DIR = "data/invoices-donut/donut_json/test  "  # Where to save Donut JSON files
-MODEL = "mistral"  # Change to your Ollama model name if needed
-
-BATCH_SIZE = 10  # Number of images to process per batch
-SLEEP_BETWEEN_BATCHES = 60  # Seconds to rest between batches
+IMAGE_DIR = "data/invoices-donut/train"  # Change as needed
+OUTPUT_DIR = "data/invoices-donut/donut_json/train"  # Where to save Donut JSON files
+MODEL = "llama3.1:8b"  # Change to your Ollama model name if needed
 
 FIELDS = [
     "supplier_name", "supplier_address", "customer_name", "customer_address",
@@ -26,17 +24,14 @@ FIELDS = [
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-def extract_text_from_tokens(tokens):
-    return " ".join([t["text"] for t in tokens])
-
-def build_donut_prompt(text):
+def build_donut_prompt(tokens):
     prompt = f"""
 You are an invoice extraction assistant.
-Given the following invoice text, extract the following fields as a JSON object.
+Given the following OCR output (each token with its bounding box), extract the following fields as a JSON object.
 Fields: {', '.join(FIELDS)}
 If a field is missing, use an empty string or empty list. For repeating items, use a list.
-Invoice text:
-{text}
+OCR tokens:
+{json.dumps(tokens, ensure_ascii=False, indent=2)}
 Return only the JSON object, no explanation.
 Example output:
 {{
@@ -63,23 +58,40 @@ Example output:
 """
     return prompt
 
-image_files = [f for f in os.listdir(IMAGE_DIR) if f.lower().endswith((".png", ".jpg", ".jpeg"))]
-
-total = len(image_files)
-for batch_start in range(0, total, BATCH_SIZE):
-    batch_files = image_files[batch_start:batch_start+BATCH_SIZE]
-    for img_name in tqdm(batch_files, desc=f"Processing images {batch_start+1}-{min(batch_start+BATCH_SIZE, total)} of {total}"):
+def process_batch(batch: List[str], delay: float = 2.0, max_retries: int = 3):
+    for img_name in batch:
         img_path = os.path.join(IMAGE_DIR, img_name)
         tokens = run_paddle_ocr(img_path)
-        text = extract_text_from_tokens(tokens)
-        prompt = build_donut_prompt(text)
-        result = call_ollama(prompt, model=MODEL, force_result_key=False)
+        prompt = build_donut_prompt(tokens)
+        retries = 0
+        while True:
+            try:
+                result = call_ollama(prompt, model=MODEL, force_result_key=False)
+                break
+            except Exception as e:
+                # Ollama is local, but still handle connection errors
+                wait_time = delay * (2 ** retries)
+                print(f"Error: {e}. Waiting {wait_time:.1f}s before retrying ({retries+1}/{max_retries})...")
+                time.sleep(wait_time)
+                retries += 1
+                if retries >= max_retries:
+                    print(f"Failed to process {img_name} after {max_retries} retries. Skipping.")
+                    result = {"error": str(e), "image": img_name}
+                    break
         # Save result as JSON
         out_path = os.path.join(OUTPUT_DIR, os.path.splitext(img_name)[0] + ".json")
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
-    if batch_start + BATCH_SIZE < total:
-        print(f"Batch complete. Resting for {SLEEP_BETWEEN_BATCHES} seconds...")
-        time.sleep(SLEEP_BETWEEN_BATCHES)
+        time.sleep(delay)
+
+def batch_list(lst, batch_size):
+    for i in range(0, len(lst), batch_size):
+        yield lst[i:i+batch_size]
+
+image_files = [f for f in os.listdir(IMAGE_DIR) if f.lower().endswith((".png", ".jpg", ".jpeg"))]
+
+BATCH_SIZE = 5  # Adjust as needed for your local Ollama performance
+for batch in tqdm(list(batch_list(image_files, BATCH_SIZE)), desc="Processing batches"):
+    process_batch(batch)
 
 print(f"Extraction complete. JSON files saved to {OUTPUT_DIR}")

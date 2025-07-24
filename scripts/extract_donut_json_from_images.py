@@ -13,8 +13,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- CONFIGURATION ---
-IMAGE_DIR = "data/invoices-donut/valid"  # Change as needed
-OUTPUT_DIR = "data/invoices-donut/donut_json"  # Where to save Donut JSON files
+IMAGE_DIR = "data/invoices-donut/test"  # Change as needed
+OUTPUT_DIR = "data/invoices-donut/donut_json/test"  # Where to save Donut JSON files
 API_KEY = os.getenv("GROQ_API_KEY")  # Or set directly
 MODEL = "llama3-8b-8192"
 
