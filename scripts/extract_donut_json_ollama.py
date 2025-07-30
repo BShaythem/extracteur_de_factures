@@ -16,7 +16,7 @@ OUTPUT_DIR = "data/invoices-donut/donut_json/train"  # Where to save Donut JSON 
 MODEL = "llama3.1:8b"  # Change to your Ollama model name if needed
 
 FIELDS = [
-    "supplier_name", "supplier_address", "customer_name", "customer_address",
+    "supplier_name", "supplier_address(postal address, not email)", "customer_name", "customer_address(postal address, not email)",
     "invoice_number", "invoice_date", "due_date", "tax_amount", "tax_rate",
     "invoice_subtotal", "invoice_total", "item_description", "item_quantity",
     "item_unit_price", "item_total_price"
@@ -90,8 +90,24 @@ def batch_list(lst, batch_size):
 
 image_files = [f for f in os.listdir(IMAGE_DIR) if f.lower().endswith((".png", ".jpg", ".jpeg"))]
 
-BATCH_SIZE = 5  # Adjust as needed for your local Ollama performance
-for batch in tqdm(list(batch_list(image_files, BATCH_SIZE)), desc="Processing batches"):
+BATCH_SIZE = 30  # Adjust as needed for your local Ollama performance
+
+import datetime
+
+batches = list(batch_list(image_files, BATCH_SIZE))
+num_batches = len(batches)
+start_time = time.time()
+
+for i, batch in enumerate(tqdm(batches, desc="Processing batches")):
+    batch_start = time.time()
     process_batch(batch)
+    batch_end = time.time()
+    elapsed = batch_end - start_time
+    batches_done = i + 1
+    avg_batch_time = elapsed / batches_done
+    batches_left = num_batches - batches_done
+    est_remaining = avg_batch_time * batches_left
+    eta = datetime.timedelta(seconds=int(est_remaining))
+    print(f"[Progress] {batches_done}/{num_batches} batches done. Estimated time left: {str(eta)}")
 
 print(f"Extraction complete. JSON files saved to {OUTPUT_DIR}")

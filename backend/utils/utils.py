@@ -4,7 +4,14 @@ import numpy as np
 from PIL import Image
 from paddleocr import PaddleOCR
 import paddle
-from pdf2image import convert_from_path
+
+# Try to import pdf2image, but handle the case where it's not available
+try:
+    from pdf2image import convert_from_path
+    PDF2IMAGE_AVAILABLE = True
+except ImportError:
+    PDF2IMAGE_AVAILABLE = False
+    print("Warning: pdf2image not available. PDF processing will not work.")
 
 # Initialize PaddleOCR (GPU/CPU is auto-detected by installed paddlepaddle)
 ocr_engine = PaddleOCR(use_angle_cls=True, lang='en', show_log=False, use_gpu=False)
@@ -13,10 +20,21 @@ def pdf_to_image(pdf_path, dpi=200):
     """
     Convert the first page of a PDF to a PIL image.
     """
-    images = convert_from_path(pdf_path, dpi=dpi, first_page=1, last_page=1)
-    if not images:
-        raise ValueError("No pages found in PDF.")
-    return images[0]
+    if not PDF2IMAGE_AVAILABLE:
+        raise ValueError("pdf2image is not available. Please install it with: pip install pdf2image")
+    
+    try:
+        # Try to convert PDF to image
+        images = convert_from_path(pdf_path, dpi=dpi, first_page=1, last_page=1)
+        if not images:
+            raise ValueError("No pages found in PDF.")
+        return images[0]
+    except Exception as e:
+        print(f"Error converting PDF to image: {str(e)}")
+        print("This might be due to missing poppler dependency.")
+        print("On Windows, you can install it via: conda install -c conda-forge poppler")
+        print("Or download from: https://github.com/oschwartz10612/poppler-windows/releases/")
+        raise ValueError(f"Failed to convert PDF to image: {str(e)}")
 
 def preprocess_image_for_ocr(img_path_or_pil, return_scale=False, binarize=True):
     """
@@ -27,8 +45,11 @@ def preprocess_image_for_ocr(img_path_or_pil, return_scale=False, binarize=True)
         cv_img = cv2.cvtColor(np.array(img_path_or_pil), cv2.COLOR_RGB2BGR)
     else:
         cv_img = cv2.imread(img_path_or_pil)
+    
     if cv_img is None:
+        print(f"Warning: Could not read image from {img_path_or_pil}")
         return (None, None, None) if return_scale else None
+    
     # Denoise
     cv_img = cv2.fastNlMeansDenoisingColored(cv_img, None, 10, 10, 7, 21)
     # Sharpen
@@ -50,6 +71,7 @@ def preprocess_image_for_ocr(img_path_or_pil, return_scale=False, binarize=True)
             bin_img = gray
     else:
         bin_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+    
     h, w = bin_img.shape[:2] if binarize else bin_img.shape[:2]
     orig_h, orig_w = h, w
     w_scale = h_scale = 1.0
@@ -59,6 +81,7 @@ def preprocess_image_for_ocr(img_path_or_pil, return_scale=False, binarize=True)
         h, w = bin_img.shape[:2]
         w_scale = w / orig_w
         h_scale = h / orig_h
+    
     image = Image.fromarray(bin_img).convert("RGB")
     if return_scale:
         return image, w_scale, h_scale
@@ -70,26 +93,52 @@ def run_paddle_ocr(file_path):
     Returns a list of dicts: [{"text": ..., "bbox": [...]}, ...]
     """
     ext = os.path.splitext(file_path)[-1].lower()
-    if ext == ".pdf":
-        pil_img = pdf_to_image(file_path)
-        preprocessed_img = preprocess_image_for_ocr(pil_img, return_scale=False, binarize=False)
-        img = np.array(preprocessed_img.convert("RGB"))
-    else:
-        preprocessed_img = preprocess_image_for_ocr(file_path, return_scale=False, binarize=False)
-        img = np.array(preprocessed_img.convert("RGB"))
-    height, width = img.shape[:2]
-    result = ocr_engine.ocr(img, cls=True)
-    ocr_output = []
-    for line in result[0]:
-        text = line[1][0].strip()
-        if not text or all(c in ",.-|_:;" for c in text):
-            continue
-        box = line[0]  # 4 points: [[x0, y0], [x1, y1], [x2, y2], [x3, y3]]
-        xs = [pt[0] for pt in box]
-        ys = [pt[1] for pt in box]
-        bbox_rect = [int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))]
-        ocr_output.append({"text": text, "bbox": bbox_rect})
-    return ocr_output
+    
+    try:
+        if ext == ".pdf":
+            if not PDF2IMAGE_AVAILABLE:
+                raise ValueError("PDF processing not available. Please install pdf2image: pip install pdf2image")
+            
+            # Convert PDF to PIL Image
+            pil_img = pdf_to_image(file_path)
+            if pil_img is None:
+                raise ValueError("Failed to convert PDF to image")
+            
+            # Preprocess the PIL image
+            preprocessed_img = preprocess_image_for_ocr(pil_img, return_scale=False, binarize=False)
+            if preprocessed_img is None:
+                raise ValueError("Failed to preprocess PDF image")
+            
+            img = np.array(preprocessed_img.convert("RGB"))
+        else:
+            # Process regular image file
+            preprocessed_img = preprocess_image_for_ocr(file_path, return_scale=False, binarize=False)
+            if preprocessed_img is None:
+                raise ValueError("Failed to preprocess image file")
+            
+            img = np.array(preprocessed_img.convert("RGB"))
+        
+        height, width = img.shape[:2]
+        result = ocr_engine.ocr(img, cls=True)
+        
+        if not result or not result[0]:
+            return []
+        
+        ocr_output = []
+        for line in result[0]:
+            text = line[1][0].strip()
+            if not text or all(c in ",.-|_:;" for c in text):
+                continue
+            box = line[0]  # 4 points: [[x0, y0], [x1, y1], [x2, y2], [x3, y3]]
+            xs = [pt[0] for pt in box]
+            ys = [pt[1] for pt in box]
+            bbox_rect = [int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))]
+            ocr_output.append({"text": text, "bbox": bbox_rect})
+        return ocr_output
+        
+    except Exception as e:
+        print(f"Error processing file {file_path}: {str(e)}")
+        return []
 
 
 

@@ -2,87 +2,96 @@ import os
 import json
 import time
 from groq import Groq
+from dotenv import load_dotenv
+from backend.utils.prompts import build_llm_prompt
+
+load_dotenv()
 
 class GroqService:
     def __init__(self, api_key=None):
-        # Debug: print the env variable value
         print("GROQ_API_KEY from env:", os.getenv("GROQ_API_KEY"))
-        self.client = Groq(
-            api_key=api_key or os.getenv("GROQ_API_KEY")
-        )
+        api_key = api_key or os.getenv("GROQ_API_KEY")
+        if not api_key:
+            raise ValueError("GROQ_API_KEY environment variable is required for Groq service")
+        self.client = Groq(api_key=api_key)
         self.last_request_time = 0
-        self.request_interval = 2.0  # 2 seconds between requests for free tier
-    
-    def build_llm_prompt2(self, ocr_tokens):
-        """Build prompt for invoice annotation task"""
-        prompt = (
-            "You are an invoice annotation assistant.\n"
-            "Given the following OCR tokens and their bounding boxes, return a JSON with a 'result' key.\n"
-            "Each element in 'result' should be a dict with:\n"
-            "  'value': { 'x': <top-left-x in percent>, 'y': <top-left-y in percent>, 'width': <width in percent>, 'height': <height in percent>, 'rotation': 0, 'labels': [<field>] }\n"
-            "If a field spans multiple tokens, group them in a single box.\n"
-            "The labels should be: invoice_number, invoice_date, due_date, vendor-name, vendor-address, customer-name, customer-address, item-description, item-quantity, item-unit_price, item-total_price, subtotal, tax_rate, total_amount\n"
-            "OCR tokens:\n"
-        )
-        for token in ocr_tokens:
-            prompt += f"Text: '{token['text']}' at bbox {token['bbox']}\n"
-        
-        prompt += (
-            "\nReturn only the JSON with the 'result' key, no explanation.\n"
-            "Example output:\n"
-            "{\n  \"result\": [\n    {\n      \"value\": { \"x\": 10.5, \"y\": 5.2, \"width\": 15.0, \"height\": 3.1, \"rotation\": 0, \"labels\": [\"invoice_number\"] }\n    }\n  ]\n}\n"
-        )
-        return prompt
-    
-    def call_groq(self, prompt, model="llama3-8b-8192", force_result_key=True):
-        """Call GroqCloud API with rate limiting"""
-        # Rate limiting for free tier
-        time_since_last = time.time() - self.last_request_time
-        if time_since_last < self.request_interval:
-            time.sleep(self.request_interval - time_since_last)
-        
+        self.request_interval = 2.0
+
+    def call_groq(self, prompt):
+        """
+        Call Groq API and return standardized format.
+        """
         try:
-            chat_completion = self.client.chat.completions.create(
+            # Rate limiting
+            current_time = time.time()
+            time_since_last = current_time - self.last_request_time
+            if time_since_last < self.request_interval:
+                time.sleep(self.request_interval - time_since_last)
+            
+            # Call Groq API
+            response = self.client.chat.completions.create(
+                model="llama3-8b-8192",
                 messages=[
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
+                    {"role": "user", "content": prompt}
                 ],
-                model=model,
                 temperature=0.1,
-                max_tokens=2048  # Reduced for free tier
+                max_tokens=2000
             )
             
             self.last_request_time = time.time()
-            response_text = chat_completion.choices[0].message.content
+            llm_response = response.choices[0].message.content.strip()
             
-            # Try to parse JSON response
+            # Try to parse JSON from the response
             try:
-                response_json = json.loads(response_text)
-                if force_result_key and "result" not in response_json:
-                    return {"result": []}
-                return response_json
-            except json.JSONDecodeError:
-                # If JSON parsing fails, try to extract JSON from text
-                import re
-                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-                if json_match:
-                    try:
-                        response_json = json.loads(json_match.group())
-                        if force_result_key and "result" not in response_json:
-                            return {"result": []}
-                        return response_json
-                    except json.JSONDecodeError:
-                        pass
-                
-                # If all fails, return empty result
-                return {"result": []}
+                # Extract JSON from the response (in case there's extra text)
+                start_idx = llm_response.find('{')
+                end_idx = llm_response.rfind('}') + 1
+                if start_idx != -1 and end_idx != 0:
+                    json_str = llm_response[start_idx:end_idx]
+                    parsed_data = json.loads(json_str)
+                    
+                    # Ensure it has the expected structure
+                    if "extracted_fields" in parsed_data:
+                        return parsed_data["extracted_fields"]
+                    else:
+                        # If it doesn't have the right structure, create empty result
+                        return self._get_empty_result()
+                else:
+                    return self._get_empty_result()
+                    
+            except json.JSONDecodeError as e:
+                print(f"Failed to parse JSON from Groq response: {e}")
+                print(f"Raw response: {llm_response}")
+                return self._get_empty_result()
                 
         except Exception as e:
-            print(f"Error calling GroqCloud: {e}")
-            time.sleep(5)  # Wait longer on error
-            return {"result": []}
+            print(f"Error calling Groq: {str(e)}")
+            return self._get_empty_result()
+
+    def build_llm_prompt2(self, ocr_tokens):
+        """
+        Build prompt using the standardized format from prompts.py
+        """
+        return build_llm_prompt(ocr_tokens)
+
+    def _get_empty_result(self):
+        """
+        Return empty result in standardized format.
+        """
+        return {
+            "supplier_name": {"candidates": [], "selected": ""},
+            "supplier_address": {"candidates": [], "selected": ""},
+            "customer_name": {"candidates": [], "selected": ""},
+            "customer_address": {"candidates": [], "selected": ""},
+            "invoice_number": {"candidates": [], "selected": ""},
+            "invoice_date": {"candidates": [], "selected": ""},
+            "due_date": {"candidates": [], "selected": ""},
+            "invoice_subtotal": {"candidates": [], "selected": ""},
+            "tax_amount": {"candidates": [], "selected": ""},
+            "tax_rate": {"candidates": [], "selected": ""},
+            "invoice_total": {"candidates": [], "selected": ""},
+            "items": {"candidates": [], "selected": []}
+        }
 
 # Example usage
 if __name__ == "__main__":
