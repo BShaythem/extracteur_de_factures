@@ -17,7 +17,7 @@ seqeval==1.2.2
 ipywidgets
 groq
 sentencepiece
-python-dotenv
+flask-cors==4.0.0
 
 # --- OCR dependencies required for paddleocr ---
 attrdict
