@@ -9,7 +9,6 @@ import {
   Grid,
   TextField,
   FormControl,
-  InputLabel,
   Select,
   MenuItem,
   Chip,
@@ -24,6 +23,7 @@ import {
   DialogContent,
   DialogActions,
 } from '@mui/material';
+import Autocomplete from '@mui/material/Autocomplete';
 import {
   ArrowBack as ArrowBackIcon,
   Save as SaveIcon,
@@ -32,10 +32,12 @@ import {
   Delete as DeleteIcon,
 } from '@mui/icons-material';
 import api from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 
 const InvoiceDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user, loading: authLoading } = useAuth();
   const [invoice, setInvoice] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -49,17 +51,32 @@ const InvoiceDetail = () => {
     unit_price: '',
     total_price: '',
   });
+  const [zoom, setZoom] = useState(1);
+
+  const orderedGroups = [
+    { title: 'Supplier', fields: ['supplier_name', 'supplier_address'] },
+    { title: 'Customer', fields: ['customer_name', 'customer_address'] },
+    { title: 'Dates & Number', fields: ['invoice_date', 'due_date', 'invoice_number'] },
+    { title: 'Tax & Totals', fields: ['tax_rate', 'tax_amount', 'invoice_subtotal', 'invoice_total'] },
+  ];
 
   useEffect(() => {
-    fetchInvoice();
-  }, [id]);
+    if (user) {
+      fetchInvoice();
+    }
+  }, [id, user]);
 
   const fetchInvoice = async () => {
     try {
       setLoading(true);
-      const response = await api.get(`/invoice/${id}`);
+      const response = await api.get(`/invoice/invoices/${id}`);
       setInvoice(response.data);
     } catch (error) {
+      if (error.response?.status === 401) {
+        // User is not authenticated, redirect to login
+        navigate('/login');
+        return;
+      }
       setError('Failed to load invoice');
       console.error('Error fetching invoice:', error);
     } finally {
@@ -133,7 +150,7 @@ const InvoiceDetail = () => {
     setSuccess('');
 
     try {
-              await api.put(`/invoice/${id}`, {
+              await api.put(`/invoice/invoices/${id}`, {
         extracted_fields: invoice.extracted_fields,
       });
 
@@ -152,7 +169,7 @@ const InvoiceDetail = () => {
     }
 
     try {
-              await api.delete(`/invoice/${id}`);
+              await api.delete(`/invoice/invoices/${id}`);
       navigate('/');
     } catch (error) {
       setError('Failed to delete invoice');
@@ -166,56 +183,40 @@ const InvoiceDetail = () => {
   };
 
   const renderField = (fieldName, field) => {
-    const hasCandidates = field.candidates && field.candidates.length > 0;
-    const confidence = hasCandidates ? field.candidates[0]?.confidence : null;
+    const candidates = field?.candidates || [];
+    const selectedValue = field?.selected || '';
 
     return (
-      <Grid item xs={12} sm={6} key={fieldName}>
+      <Grid xs={12} md={6} key={fieldName}>
         <Paper sx={{ p: 2 }}>
           <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
             <Typography variant="subtitle2" color="text.secondary" sx={{ textTransform: 'capitalize' }}>
               {fieldName.replace(/_/g, ' ')}
             </Typography>
-            {confidence && (
-              <Chip
-                label={`${(confidence * 100).toFixed(1)}%`}
-                color={getConfidenceColor(confidence)}
-                size="small"
-              />
+            {candidates[0]?.confidence != null && (
+              <Chip label={`${(candidates[0].confidence * 100).toFixed(1)}%`} color={getConfidenceColor(candidates[0].confidence)} size="small" />
             )}
           </Box>
 
-          {hasCandidates && field.candidates.length > 1 ? (
-            <FormControl fullWidth size="small">
-              <Select
-                value={field.selected || ''}
-                onChange={(e) => handleFieldChange(fieldName, e.target.value)}
+          <Autocomplete
+            freeSolo
+            disableClearable
+            options={candidates.map(c => c.value)}
+            value={selectedValue}
+            onChange={(_, val) => editMode && handleFieldChange(fieldName, val || '')}
+            onInputChange={(_, val, reason) => {
+              if (!editMode) return;
+              if (reason === 'input') handleFieldChange(fieldName, val);
+            }}
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                size="small"
                 disabled={!editMode}
-              >
-                {field.candidates.map((candidate, index) => (
-                  <MenuItem key={index} value={candidate.value}>
-                    <Box display="flex" justifyContent="space-between" width="100%">
-                      <span>{candidate.value}</span>
-                      <Chip
-                        label={`${(candidate.confidence * 100).toFixed(1)}%`}
-                        color={getConfidenceColor(candidate.confidence)}
-                        size="small"
-                        sx={{ ml: 1 }}
-                      />
-                    </Box>
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          ) : (
-            <TextField
-              fullWidth
-              size="small"
-              value={field.selected || ''}
-              onChange={(e) => handleFieldChange(fieldName, e.target.value)}
-              disabled={!editMode}
-            />
-          )}
+                placeholder={candidates.length > 0 ? 'Choose or type a custom value' : 'Type value'}
+              />
+            )}
+          />
         </Paper>
       </Grid>
     );
@@ -223,52 +224,104 @@ const InvoiceDetail = () => {
 
   const renderItems = () => {
     const items = invoice?.extracted_fields?.items?.selected || [];
-    
+
     return (
-      <Grid item xs={12}>
+      <Grid xs={12}>
         <Paper sx={{ p: 2 }}>
           <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
             <Typography variant="h6">Line Items</Typography>
             {editMode && (
-              <Button
-                startIcon={<AddIcon />}
-                onClick={() => setAddItemDialog(true)}
-                size="small"
-              >
+              <Button variant="outlined" size="small" startIcon={<AddIcon />} onClick={() => setAddItemDialog(true)}>
                 Add Item
               </Button>
             )}
           </Box>
 
           {items.length === 0 ? (
-            <Typography variant="body2" color="text.secondary">
-              No items found
-            </Typography>
+            <Typography variant="body2" color="text.secondary">No items found</Typography>
           ) : (
             <Grid container spacing={2}>
-              {items.map((item, index) => (
-                <Grid item xs={12} key={index}>
+              {items.map((item, idx) => (
+                <Grid xs={12} key={idx}>
                   <Card variant="outlined">
                     <CardContent>
-                      <Box display="flex" justifyContent="space-between" alignItems="center">
-                        <Box flex={1}>
-                          <Typography variant="body2" fontWeight="bold">
-                            {item.description}
-                          </Typography>
-                          <Typography variant="caption" color="text.secondary">
-                            Qty: {item.quantity} × ${item.unit_price} = ${item.total_price}
-                          </Typography>
-                        </Box>
-                        {editMode && (
-                          <IconButton
+                      <Grid container spacing={2} alignItems="center">
+                        <Grid xs={6}>
+                          <TextField
+                            fullWidth
+                            label="Description"
                             size="small"
-                            color="error"
-                            onClick={() => handleItemDelete(index)}
-                          >
-                            <DeleteIcon />
-                          </IconButton>
-                        )}
-                      </Box>
+                            value={item.description}
+                            onChange={(e) => {
+                              if (!editMode) return;
+                              const v = e.target.value;
+                              setInvoice(prev => {
+                                const itemsUpd = [...(prev.extracted_fields.items.selected || [])];
+                                itemsUpd[idx] = { ...itemsUpd[idx], description: v };
+                                return { ...prev, extracted_fields: { ...prev.extracted_fields, items: { ...prev.extracted_fields.items, selected: itemsUpd } } };
+                              });
+                            }}
+                            disabled={!editMode}
+                          />
+                        </Grid>
+                        <Grid xs={2}>
+                          <TextField
+                            fullWidth
+                            label="Qty"
+                            size="small"
+                            type="number"
+                            value={item.quantity}
+                            onChange={(e) => {
+                              if (!editMode) return;
+                              const v = e.target.value;
+                              setInvoice(prev => {
+                                const itemsUpd = [...(prev.extracted_fields.items.selected || [])];
+                                itemsUpd[idx] = { ...itemsUpd[idx], quantity: v };
+                                return { ...prev, extracted_fields: { ...prev.extracted_fields, items: { ...prev.extracted_fields.items, selected: itemsUpd } } };
+                              });
+                            }}
+                            disabled={!editMode}
+                          />
+                        </Grid>
+                        <Grid xs={2}>
+                          <TextField
+                            fullWidth
+                            label="Unit"
+                            size="small"
+                            type="number"
+                            value={item.unit_price}
+                            onChange={(e) => {
+                              if (!editMode) return;
+                              const v = e.target.value;
+                              setInvoice(prev => {
+                                const itemsUpd = [...(prev.extracted_fields.items.selected || [])];
+                                itemsUpd[idx] = { ...itemsUpd[idx], unit_price: v };
+                                return { ...prev, extracted_fields: { ...prev.extracted_fields, items: { ...prev.extracted_fields.items, selected: itemsUpd } } };
+                              });
+                            }}
+                            disabled={!editMode}
+                          />
+                        </Grid>
+                        <Grid xs={2}>
+                          <TextField
+                            fullWidth
+                            label="Total"
+                            size="small"
+                            type="number"
+                            value={item.total_price}
+                            onChange={(e) => {
+                              if (!editMode) return;
+                              const v = e.target.value;
+                              setInvoice(prev => {
+                                const itemsUpd = [...(prev.extracted_fields.items.selected || [])];
+                                itemsUpd[idx] = { ...itemsUpd[idx], total_price: v };
+                                return { ...prev, extracted_fields: { ...prev.extracted_fields, items: { ...prev.extracted_fields.items, selected: itemsUpd } } };
+                              });
+                            }}
+                            disabled={!editMode}
+                          />
+                        </Grid>
+                      </Grid>
                     </CardContent>
                   </Card>
                 </Grid>
@@ -280,7 +333,17 @@ const InvoiceDetail = () => {
     );
   };
 
-  if (loading) {
+  if (loading || authLoading) {
+    return (
+      <Box display="flex" justifyContent="center" alignItems="center" minHeight="100vh">
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  if (!user) {
+    // User is not authenticated, redirect to login
+    navigate('/login');
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="100vh">
         <CircularProgress />
@@ -352,56 +415,121 @@ const InvoiceDetail = () => {
         </Alert>
       )}
 
-      <Grid container spacing={3}>
-        {/* Image Preview */}
-        <Grid item xs={12} md={6}>
-          <Paper sx={{ p: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Invoice Image
-            </Typography>
-            <img
-              src={`http://localhost:5000/invoices/${id}/image`}
-              alt="Invoice"
-              style={{
-                width: '100%',
-                height: 'auto',
-                maxHeight: '500px',
-                objectFit: 'contain',
-              }}
-            />
-          </Paper>
-        </Grid>
-
-        {/* Invoice Details */}
-        <Grid item xs={12} md={6}>
-          <Paper sx={{ p: 2 }}>
+      {/* Side-by-side layout like Results */}
+      <Box sx={{ display: 'flex', gap: 3, alignItems: 'flex-start' }}>
+        {/* Left: Image with zoom */}
+        <Box sx={{ flex: '0 0 55%', minWidth: 0 }}>
+          <Paper sx={{ p: 2, height: '85vh', display: 'flex', flexDirection: 'column' }}>
             <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-              <Typography variant="h6">Invoice Information</Typography>
+              <Typography variant="h6">Invoice Image</Typography>
+              {invoice?.image_exists && (
+                <Box display="flex" gap={1}>
+                  <Button size="small" variant="outlined" onClick={() => setZoom(z => Math.max(0.5, +(z - 0.1).toFixed(2)))}>-</Button>
+                  <Typography variant="body2" sx={{ mx: 1 }}>{Math.round(zoom * 100)}%</Typography>
+                  <Button size="small" variant="outlined" onClick={() => setZoom(z => Math.min(3, +(z + 0.1).toFixed(2)))}>+</Button>
+                  <Button size="small" onClick={() => setZoom(1)}>Reset</Button>
+                </Box>
+              )}
+            </Box>
+            <Box sx={{ overflow: 'auto', flex: 1, minHeight: 0, borderRadius: 1 }}>
+              {invoice?.image_exists ? (
+                <Box>
+                  <img
+                    src={`http://localhost:5000/api/invoice/invoices/${id}/image`}
+                    alt="Invoice"
+                    style={{ width: '100%', height: 'auto', transform: `scale(${zoom})`, transformOrigin: 'top left' }}
+                    onError={(e) => { e.currentTarget.onerror = null; e.currentTarget.style.display = 'none'; }}
+                  />
+                </Box>
+              ) : (
+                <Box
+                  sx={{
+                    height: 300,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    bgcolor: 'action.hover',
+                    color: 'text.secondary',
+                  }}
+                >
+                  No image available
+                </Box>
+              )}
+            </Box>
+          </Paper>
+        </Box>
+
+        {/* Right: Fields like Results */}
+        <Box sx={{ flex: '1 0 45%', minWidth: 0 }}>
+          <Paper sx={{ p: 2, height: '85vh', display: 'flex', flexDirection: 'column' }}>
+            <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
+              <Typography variant="h6">Extracted Fields</Typography>
               <Box display="flex" gap={1}>
                 <Chip label={invoice.method || 'unknown'} color="primary" size="small" />
                 <Chip label={invoice.status || 'unknown'} color="success" size="small" />
               </Box>
             </Box>
-            
-            <Grid container spacing={2}>
-              {Object.entries(invoice.extracted_fields).map(([fieldName, field]) => {
-                if (fieldName === 'items') return null;
-                return renderField(fieldName, field);
-              })}
-            </Grid>
-            
-            <Divider sx={{ my: 3 }} />
-            {renderItems()}
+
+            <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+              <Grid container spacing={2}>
+                {(() => {
+                  const used = new Set();
+                  const sections = [];
+
+                  for (const group of orderedGroups) {
+                    const present = group.fields.filter((name) => invoice?.extracted_fields?.[name]);
+                    if (present.length === 0) continue;
+
+                    sections.push(
+                      <Grid xs={12} key={`group-${group.title}`}>
+                        <Typography variant="subtitle2" sx={{ textTransform: 'uppercase', fontWeight: 700, color: 'text.secondary', mb: 1 }}>
+                          {group.title}
+                        </Typography>
+                        <Divider sx={{ mb: 2 }} />
+                        <Grid container spacing={2}>
+                          {present.map((fieldName) => {
+                            used.add(fieldName);
+                            const field = invoice.extracted_fields[fieldName];
+                            return renderField(fieldName, field);
+                          })}
+                        </Grid>
+                      </Grid>
+                    );
+                  }
+
+                  const remaining = Object.entries(invoice?.extracted_fields || {})
+                    .filter(([name]) => name !== 'items' && !used.has(name));
+                  if (remaining.length) {
+                    sections.push(
+                      <Grid xs={12} key="group-other">
+                        <Typography variant="subtitle2" sx={{ textTransform: 'uppercase', fontWeight: 700, color: 'text.secondary', mb: 1 }}>
+                          Other
+                        </Typography>
+                        <Divider sx={{ mb: 2 }} />
+                        <Grid container spacing={2}>
+                          {remaining.map(([name, field]) => renderField(name, field))}
+                        </Grid>
+                      </Grid>
+                    );
+                  }
+
+                  return sections;
+                })()}
+              </Grid>
+
+              <Divider sx={{ my: 3 }} />
+              {renderItems()}
+            </Box>
           </Paper>
-        </Grid>
-      </Grid>
+        </Box>
+      </Box>
 
       {/* Add Item Dialog */}
       <Dialog open={addItemDialog} onClose={() => setAddItemDialog(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Add Line Item</DialogTitle>
         <DialogContent>
           <Grid container spacing={2} sx={{ mt: 1 }}>
-            <Grid item xs={12}>
+                         <Grid xs={12}>
               <TextField
                 fullWidth
                 label="Description"
@@ -409,7 +537,7 @@ const InvoiceDetail = () => {
                 onChange={(e) => setNewItem({ ...newItem, description: e.target.value })}
               />
             </Grid>
-            <Grid item xs={6}>
+            <Grid xs={6}>
               <TextField
                 fullWidth
                 label="Quantity"
@@ -418,7 +546,7 @@ const InvoiceDetail = () => {
                 onChange={(e) => setNewItem({ ...newItem, quantity: e.target.value })}
               />
             </Grid>
-            <Grid item xs={6}>
+            <Grid xs={6}>
               <TextField
                 fullWidth
                 label="Unit Price"

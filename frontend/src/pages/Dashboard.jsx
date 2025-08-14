@@ -8,6 +8,7 @@ import {
   Card,
   CardContent,
   CardMedia,
+  CardActionArea,
   Grid,
   TextField,
   IconButton,
@@ -44,21 +45,28 @@ const Dashboard = () => {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [error, setError] = useState('');
   
-  const { user, logout } = useAuth();
+  const { user, loading: authLoading, logout } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    fetchInvoices();
-  }, []);
+    if (user) {
+      fetchInvoices();
+    }
+  }, [user]);
 
   const fetchInvoices = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/invoice');
+      const response = await api.get('/invoice/invoices');
       setInvoices(response.data.invoices || []); // Handle the nested structure
       setError(''); // Clear any previous errors
     } catch (error) {
       console.error('Error fetching invoices:', error);
+      if (error.response?.status === 401) {
+        // User is not authenticated, redirect to login
+        navigate('/login');
+        return;
+      }
       setInvoices([]); // Set empty array on error
       setError(''); // Clear error - no invoices is normal
     } finally {
@@ -73,7 +81,7 @@ const Dashboard = () => {
 
   const handleMenuClose = () => {
     setAnchorEl(null);
-    setSelectedInvoice(null);
+    // setSelectedInvoice(null); // Remove this line
   };
 
   const handleViewInvoice = () => {
@@ -99,7 +107,7 @@ const Dashboard = () => {
     if (!selectedInvoice) return;
 
     try {
-              await api.delete(`/invoice/${selectedInvoice.id}`);
+              await api.delete(`/invoice/invoices/${selectedInvoice.id}`);
       setInvoices(invoices.filter(inv => inv.id !== selectedInvoice.id));
       setDeleteDialogOpen(false);
     } catch (error) {
@@ -137,7 +145,17 @@ const Dashboard = () => {
     }
   };
 
-  if (loading) {
+  if (loading || authLoading) {
+    return (
+      <Box display="flex" justifyContent="center" alignItems="center" minHeight="100vh">
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  if (!user) {
+    // User is not authenticated, redirect to login
+    navigate('/login');
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="100vh">
         <CircularProgress />
@@ -212,57 +230,87 @@ const Dashboard = () => {
           )}
         </Box>
       ) : (
-        <Grid container spacing={3}>
+        <Grid container spacing={3} alignItems="stretch">
           {filteredInvoices.map((invoice) => (
-            <Grid item xs={12} sm={6} md={4} key={invoice.id}>
-              <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-                <CardMedia
-                  component="img"
-                  height="140"
-                  image={`http://localhost:5000/invoices/${invoice.id}/image`}
-                  alt="Invoice"
-                  sx={{ objectFit: 'cover' }}
-                />
-                <CardContent sx={{ flexGrow: 1 }}>
-                  <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={1}>
-                    <Typography variant="h6" component="h2" noWrap>
-                      {invoice.invoice_number || 'No Number'}
-                    </Typography>
-                    <IconButton
-                      size="small"
-                      onClick={(e) => handleMenuClick(e, invoice)}
+            <Grid key={invoice.id} sx={{ width: { xs: '100%', sm: '50%', md: '33.33%', lg: '20%' }, display: 'flex', flexDirection: 'column', height: 360 }}>
+              <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative', width: '100%' }}>
+                {/* Three dots menu absolutely at top right, outside CardActionArea */}
+                <IconButton
+                  size="small"
+                  onClick={(e) => { e.stopPropagation(); handleMenuClick(e, invoice); }}
+                  sx={{
+                    position: 'absolute',
+                    top: 8,
+                    right: 8,
+                    bgcolor: 'rgba(255,255,255,0.85)',
+                    boxShadow: 1,
+                    '&:hover': { bgcolor: 'rgba(240,240,240,1)' },
+                    zIndex: 2,
+                  }}
+                >
+                  <MoreVertIcon />
+                </IconButton>
+                <CardActionArea onClick={() => navigate(`/invoice/${invoice.id}`)} sx={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'stretch', minHeight: 0 }}>
+                  {invoice.image_exists ? (
+                    <CardMedia
+                      component="img"
+                      height="140"
+                      image={`http://localhost:5000/api/invoice/invoices/${invoice.id}/image`}
+                      alt="Invoice"
+                      sx={{ objectFit: 'cover', flexShrink: 0 }}
+                      onError={(e) => {
+                        e.currentTarget.onerror = null;
+                        e.currentTarget.src = '/vite.svg';
+                      }}
+                    />
+                  ) : (
+                    <Box
+                      sx={{
+                        height: 140,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        bgcolor: 'action.hover',
+                        color: 'text.secondary',
+                        width: '100%',
+                        flexShrink: 0
+                      }}
                     >
-                      <MoreVertIcon />
-                    </IconButton>
-                  </Box>
-                  
-                  <Typography variant="body2" color="text.secondary" gutterBottom>
-                    {invoice.supplier_name || 'Unknown Supplier'}
-                  </Typography>
-                  
-                  <Typography variant="body2" color="text.secondary" gutterBottom>
-                    {invoice.customer_name || 'Unknown Customer'}
-                  </Typography>
-                  
-                  <Box display="flex" gap={1} mt={2}>
-                    <Chip
-                      label={invoice.status || 'unknown'}
-                      color={getStatusColor(invoice.status)}
-                      size="small"
-                    />
-                    <Chip
-                      label={invoice.method || 'unknown'}
-                      color={getMethodColor(invoice.method)}
-                      size="small"
-                    />
-                  </Box>
-                  
-                  {invoice.invoice_total && (
-                    <Typography variant="h6" color="primary" sx={{ mt: 1 }}>
-                      ${parseFloat(invoice.invoice_total).toFixed(2)}
-                    </Typography>
+                      No image available
+                    </Box>
                   )}
-                </CardContent>
+                  <CardContent sx={{ flex: '1 1 0', display: 'flex', flexDirection: 'column', overflow: 'hidden', pb: 1, minHeight: 0 }}>
+                    <Box display="flex" alignItems="center" justifyContent="space-between" mb={1}>
+                      <Typography variant="h6" component="h2" noWrap sx={{ maxWidth: '70%', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {invoice.invoice_number || 'No Number'}
+                      </Typography>
+                    </Box>
+                    <Box display="flex" gap={1} mb={1}>
+                      <Chip
+                        label={invoice.status || 'unknown'}
+                        color={getStatusColor(invoice.status)}
+                        size="small"
+                        sx={{ maxWidth: '50%', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                      />
+                      <Chip
+                        label={invoice.method || 'unknown'}
+                        color={getMethodColor(invoice.method)}
+                        size="small"
+                        sx={{ maxWidth: '50%', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                      />
+                    </Box>
+                    <Typography variant="body2" color="text.secondary" noWrap mb={1} sx={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {invoice.supplier_name || 'Unknown Supplier'}
+                    </Typography>
+                    <Box sx={{ mt: 'auto' }}>
+                      {invoice.invoice_total && (
+                        <Typography variant="h6" color="primary" noWrap>
+                          ${parseFloat(invoice.invoice_total).toFixed(2)}
+                        </Typography>
+                      )}
+                    </Box>
+                  </CardContent>
+                </CardActionArea>
               </Card>
             </Grid>
           ))}
@@ -296,7 +344,7 @@ const Dashboard = () => {
       </Menu>
 
       {/* Delete Confirmation Dialog */}
-      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
+      <Dialog open={deleteDialogOpen} onClose={() => { setDeleteDialogOpen(false); setSelectedInvoice(null); }}>
         <DialogTitle>Delete Invoice</DialogTitle>
         <DialogContent>
           <Typography>
@@ -304,8 +352,8 @@ const Dashboard = () => {
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeleteDialogOpen(false)}>Cancel</Button>
-          <Button onClick={handleDeleteConfirm} color="error" variant="contained">
+          <Button onClick={() => { setDeleteDialogOpen(false); setSelectedInvoice(null); }}>Cancel</Button>
+          <Button onClick={async () => { await handleDeleteConfirm(); setSelectedInvoice(null); }} color="error" variant="contained">
             Delete
           </Button>
         </DialogActions>

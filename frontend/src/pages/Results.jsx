@@ -47,6 +47,14 @@ const Results = () => {
   const [newItem, setNewItem] = useState({ description: '', quantity: '', unit_price: '', total_price: '' });
   const [zoom, setZoom] = useState(1);
 
+  // Helper function to clean numeric values
+  const cleanNumericValue = (value) => {
+    if (value == null || value === '') return '';
+    // Remove currency symbols, spaces, and non-numeric characters except dots and minus
+    const cleaned = String(value).replace(/[^\d.-]/g, '');
+    return cleaned;
+  };
+
   const orderedGroups = [
     { title: 'Supplier', fields: ['supplier_name', 'supplier_address'] },
     { title: 'Customer', fields: ['customer_name', 'customer_address'] },
@@ -107,9 +115,22 @@ const Results = () => {
     setError('');
     setSuccess('');
     try {
-      await api.post('/invoice', { extracted_fields: extractedData.extracted_fields, method });
+      if (!files || files.length === 0) {
+        setError('No file to save. Please go back and upload an invoice image.');
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('image', files[0]);
+      formData.append('extracted_fields', JSON.stringify(extractedData.extracted_fields));
+      formData.append('method', method || 'unknown');
+
+      await api.post('/invoice/invoices', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
       setSuccess('Invoice saved successfully!');
-      setTimeout(() => navigate('/'), 1500);
+      setTimeout(() => navigate('/'), 1000);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to save invoice');
     } finally {
@@ -124,7 +145,7 @@ const Results = () => {
     const selectedValue = field.selected || '';
 
     return (
-      <Grid item xs={12} md={6} key={fieldName}>
+      <Grid xs={12} md={6} key={fieldName}>
         <Paper sx={{ p: 2 }}>
           <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
             <Typography variant="subtitle2" color="text.secondary" sx={{ textTransform: 'capitalize' }}>
@@ -239,7 +260,7 @@ const Results = () => {
                     if (present.length === 0) continue;
 
                     sections.push(
-                      <Grid item xs={12} key={`group-${group.title}`}>
+                      <Grid xs={12} key={`group-${group.title}`}>
                         <Typography variant="subtitle2" sx={{ textTransform: 'uppercase', fontWeight: 700, color: 'text.secondary', mb: 1 }}>
                           {group.title}
                         </Typography>
@@ -260,7 +281,7 @@ const Results = () => {
                     .filter(([name]) => name !== 'items' && !used.has(name));
                   if (remaining.length) {
                     sections.push(
-                      <Grid item xs={12} key="group-other">
+                      <Grid xs={12} key="group-other">
                         <Typography variant="subtitle2" sx={{ textTransform: 'uppercase', fontWeight: 700, color: 'text.secondary', mb: 1 }}>
                           Other
                         </Typography>
@@ -288,11 +309,11 @@ const Results = () => {
               </Box>
               <Grid container spacing={2}>
                 {(extractedData?.extracted_fields?.items?.selected || []).map((item, idx) => (
-                  <Grid item xs={12} key={idx}>
+                  <Grid xs={12} key={idx}>
                     <Card variant="outlined">
                       <CardContent>
                         <Grid container spacing={2} alignItems="center">
-                          <Grid item xs={6}>
+                          <Grid xs={6}>
                             <TextField
                               fullWidth
                               label="Description"
@@ -310,13 +331,13 @@ const Results = () => {
                               disabled={!editMode}
                             />
                           </Grid>
-                          <Grid item xs={2}>
+                          <Grid xs={2}>
                             <TextField
                               fullWidth
                               label="Qty"
                               size="small"
                               type="number"
-                              value={item.quantity}
+                              value={cleanNumericValue(item.quantity)}
                               onChange={(e) => {
                                 if (!editMode) return;
                                 const v = e.target.value;
@@ -329,13 +350,13 @@ const Results = () => {
                               disabled={!editMode}
                             />
                           </Grid>
-                          <Grid item xs={2}>
+                          <Grid xs={2}>
                             <TextField
                               fullWidth
                               label="Unit"
                               size="small"
                               type="number"
-                              value={item.unit_price}
+                              value={cleanNumericValue(item.unit_price)}
                               onChange={(e) => {
                                 if (!editMode) return;
                                 const v = e.target.value;
@@ -348,13 +369,13 @@ const Results = () => {
                               disabled={!editMode}
                             />
                           </Grid>
-                          <Grid item xs={2}>
+                          <Grid xs={2}>
                             <TextField
                               fullWidth
                               label="Total"
                               size="small"
                               type="number"
-                              value={item.total_price}
+                              value={cleanNumericValue(item.total_price)}
                               onChange={(e) => {
                                 if (!editMode) return;
                                 const v = e.target.value;
@@ -383,13 +404,13 @@ const Results = () => {
         <DialogTitle>Add Line Item</DialogTitle>
         <DialogContent>
           <Grid container spacing={2} sx={{ mt: 1 }}>
-            <Grid item xs={12}>
+            <Grid xs={12}>
               <TextField fullWidth label="Description" value={newItem.description} onChange={(e) => setNewItem({ ...newItem, description: e.target.value })} />
             </Grid>
-            <Grid item xs={6}>
+            <Grid xs={6}>
               <TextField fullWidth label="Quantity" type="number" value={newItem.quantity} onChange={(e) => setNewItem({ ...newItem, quantity: e.target.value })} />
             </Grid>
-            <Grid item xs={6}>
+            <Grid xs={6}>
               <TextField fullWidth label="Unit Price" type="number" value={newItem.unit_price} onChange={(e) => setNewItem({ ...newItem, unit_price: e.target.value })} />
             </Grid>
           </Grid>

@@ -131,7 +131,7 @@ const Extraction = () => {
 
       <Grid container spacing={3}>
         {/* File Upload Section */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <Paper
             {...getRootProps()}
             sx={{
@@ -142,6 +142,10 @@ const Extraction = () => {
               borderColor: isDragActive ? 'primary.main' : 'grey.300',
               backgroundColor: isDragActive ? 'action.hover' : 'background.paper',
               transition: 'all 0.2s ease',
+              height: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'center',
               '&:hover': {
                 borderColor: 'primary.main',
                 backgroundColor: 'action.hover',
@@ -161,9 +165,8 @@ const Extraction = () => {
             </Typography>
           </Paper>
         </Grid>
-
         {/* Method Selection */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <Paper sx={{ p: 3 }}>
             <Typography variant="h6" gutterBottom>
               Extraction Method
@@ -224,7 +227,7 @@ const Extraction = () => {
           </Typography>
           <Grid container spacing={2}>
             {files.map((file, index) => (
-              <Grid item xs={12} key={index}>
+              <Grid size={12} key={index}>
                 <Card>
                   <CardContent>
                     <Box display="flex" justifyContent="space-between" alignItems="center">
