@@ -9,10 +9,33 @@ from backend.api.routes.auth_routes import require_auth
 
 invoice_bp = Blueprint('invoice', __name__)
 
-# Create uploads directory if it doesn't exist
-UPLOADS_DIR = 'uploads'
+# Determine project root (repo root) and absolute uploads directory
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../'))
+UPLOADS_DIR = os.path.join(PROJECT_ROOT, 'uploads')
 if not os.path.exists(UPLOADS_DIR):
-    os.makedirs(UPLOADS_DIR)
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
+
+
+def resolve_image_path(stored_path: str) -> str | None:
+    """Resolve stored image path to an absolute existing path.
+
+    - If stored_path is absolute and exists → return it
+    - If stored_path is relative, try relative to PROJECT_ROOT → return if exists
+    - Otherwise return None
+    """
+    try:
+        if not stored_path:
+            return None
+        # Absolute path
+        if os.path.isabs(stored_path) and os.path.exists(stored_path):
+            return stored_path
+        # Relative to project root
+        candidate = os.path.join(PROJECT_ROOT, stored_path)
+        if os.path.exists(candidate):
+            return os.path.abspath(candidate)
+        return None
+    except Exception:
+        return None
 
 def init_invoice_db():
     """Initialize the SQLite database for invoices"""
@@ -25,7 +48,6 @@ def init_invoice_db():
             image_path TEXT NOT NULL,
             extracted_fields TEXT NOT NULL,
             method TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'Draft',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users (id)
         )
@@ -43,12 +65,23 @@ def init_invoice_db():
         )
     ''')
     conn.commit()
+    # Lightweight migration: ensure 'status' column exists
+    try:
+        cursor.execute("PRAGMA table_info(invoices)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if 'status' not in cols:
+            cursor.execute("ALTER TABLE invoices ADD COLUMN status TEXT NOT NULL DEFAULT 'Draft'")
+            conn.commit()
+    except Exception:
+        # If pragma fails, proceed without blocking app startup
+        pass
+
     conn.close()
 
 @invoice_bp.route('/invoices', methods=['POST'])
 @require_auth
 def save_invoice():
-    """Save extracted invoice data"""
+    """Save extracted invoice data with file upload"""
     try:
         user_id = session['user_id']
         
@@ -103,6 +136,45 @@ def save_invoice():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@invoice_bp.route('/invoices/data', methods=['POST'])
+@require_auth
+def save_invoice_data():
+    """Save extracted invoice data without file upload"""
+    try:
+        user_id = session['user_id']
+        data = request.get_json()
+        
+        extracted_fields = data.get('extracted_fields')
+        method = data.get('method', 'unknown')
+        
+        if not extracted_fields:
+            return jsonify({'error': 'No extracted fields provided'}), 400
+        
+        # Create a placeholder image path since no file was uploaded
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        image_path = f"placeholder_{user_id}_{timestamp}.txt"
+        
+        # Save to database
+        conn = sqlite3.connect('invoices.db')
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT INTO invoices (user_id, image_path, extracted_fields, method)
+            VALUES (?, ?, ?, ?)
+        ''', (user_id, image_path, json.dumps(extracted_fields), method))
+        
+        invoice_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'message': 'Invoice data saved successfully',
+            'invoice_id': invoice_id
+        }), 201
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @invoice_bp.route('/invoices', methods=['GET'])
 @require_auth
 def get_user_invoices():
@@ -122,20 +194,54 @@ def get_user_invoices():
         
         invoices = []
         for row in cursor.fetchall():
-            invoice_id, image_path, extracted_fields, method, status, created_at = row
-            
-            # Check if image file exists
-            image_exists = os.path.exists(image_path)
-            
-            invoices.append({
-                'id': invoice_id,
-                'image_path': image_path,
-                'image_exists': image_exists,
-                'extracted_fields': json.loads(extracted_fields),
-                'method': method,
-                'status': status,
-                'created_at': created_at
-            })
+            try:
+                invoice_id, image_path, extracted_fields, method, status, created_at = row
+
+                # Safely check if image file exists
+                try:
+                    # Resolve absolute path considering project root
+                    resolved_path = resolve_image_path(image_path)
+                    image_exists = bool(resolved_path)
+                except Exception:
+                    image_exists = False
+
+                # Safely parse extracted_fields JSON
+                try:
+                    parsed_fields = json.loads(extracted_fields) if isinstance(extracted_fields, str) else (extracted_fields or {})
+                except Exception:
+                    parsed_fields = {}
+
+                # Helper to get a simple summary value from extracted fields structure
+                def get_selected(fields: dict, key: str):
+                    try:
+                        value_obj = fields.get(key)
+                        if isinstance(value_obj, dict):
+                            selected = value_obj.get('selected')
+                            # If candidates only and no selected, fallback to first candidate value
+                            if not selected and isinstance(value_obj.get('candidates'), list) and value_obj['candidates']:
+                                return value_obj['candidates'][0].get('value')
+                            return selected
+                        return None
+                    except Exception:
+                        return None
+
+                invoices.append({
+                    'id': invoice_id,
+                    'image_path': image_path,
+                    'image_exists': image_exists,
+                    'extracted_fields': parsed_fields,
+                    'method': method,
+                    'status': status,
+                    'created_at': created_at,
+                    # Flatten common fields for easier frontend use
+                    'invoice_number': get_selected(parsed_fields, 'invoice_number'),
+                    'supplier_name': get_selected(parsed_fields, 'supplier_name'),
+                    'customer_name': get_selected(parsed_fields, 'customer_name'),
+                    'invoice_total': get_selected(parsed_fields, 'invoice_total')
+                })
+            except Exception:
+                # Skip malformed rows rather than failing the entire response
+                continue
         
         conn.close()
         
@@ -167,18 +273,44 @@ def get_invoice(invoice_id):
             return jsonify({'error': 'Invoice not found'}), 404
         
         invoice_id, image_path, extracted_fields, method, status, created_at = row
-        
-        # Check if image file exists
-        image_exists = os.path.exists(image_path)
-        
+
+        # Safely check if image file exists
+        try:
+            resolved_path = resolve_image_path(image_path)
+            image_exists = bool(resolved_path)
+        except Exception:
+            image_exists = False
+
+        # Safely parse extracted_fields JSON
+        try:
+            parsed_fields = json.loads(extracted_fields) if isinstance(extracted_fields, str) else (extracted_fields or {})
+        except Exception:
+            parsed_fields = {}
+
+        def get_selected(fields: dict, key: str):
+            try:
+                value_obj = fields.get(key)
+                if isinstance(value_obj, dict):
+                    selected = value_obj.get('selected')
+                    if not selected and isinstance(value_obj.get('candidates'), list) and value_obj['candidates']:
+                        return value_obj['candidates'][0].get('value')
+                    return selected
+                return None
+            except Exception:
+                return None
+
         return jsonify({
             'id': invoice_id,
             'image_path': image_path,
             'image_exists': image_exists,
-            'extracted_fields': json.loads(extracted_fields),
+            'extracted_fields': parsed_fields,
             'method': method,
             'status': status,
-            'created_at': created_at
+            'created_at': created_at,
+            'invoice_number': get_selected(parsed_fields, 'invoice_number'),
+            'supplier_name': get_selected(parsed_fields, 'supplier_name'),
+            'customer_name': get_selected(parsed_fields, 'customer_name'),
+            'invoice_total': get_selected(parsed_fields, 'invoice_total')
         }), 200
         
     except Exception as e:
@@ -288,13 +420,29 @@ def get_invoice_image(invoice_id):
             return jsonify({'error': 'Invoice not found'}), 404
         
         image_path = row[0]
-        
-        if not os.path.exists(image_path):
+
+        # Resolve absolute path and verify existence
+        try:
+            abs_path = os.path.abspath(image_path)
+        except Exception:
+            abs_path = image_path
+
+        if not (abs_path and os.path.exists(abs_path)):
             return jsonify({'error': 'Image file not found'}), 404
-        
-        # Return the image file
+
+        # Guess mimetype from extension
+        import mimetypes
+        mime, _ = mimetypes.guess_type(abs_path)
+        if not mime:
+            mime = 'application/octet-stream'
+
+        # Stream the file; guard against unexpected file IO errors
         from flask import send_file
-        return send_file(image_path, mimetype='image/jpeg')
+        try:
+            return send_file(abs_path, mimetype=mime, conditional=True, as_attachment=False)
+        except Exception as e:
+            # Don't 500 on image issues; report as not found to let UI fallback
+            return jsonify({'error': f'Unable to read image: {str(e)}'}), 404
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500 
