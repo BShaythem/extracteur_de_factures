@@ -146,3 +146,4 @@ build/
 *.bak
 *.swp
 *.swo
+node_modules
